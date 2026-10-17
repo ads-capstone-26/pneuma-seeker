@@ -12,6 +12,10 @@ EHRSQL was built on a modified MIMIC-III schema, so each question is classified:
          diagnoses_icd.charttime   -> admissions.admittime (MIMIC-III has no diagnosis time;
          procedures_icd.charttime  -> admissions.admittime  an approximation, see notes)
     C  needs tables that are not loaded yet (labevents, prescriptions, ...): skipped
+    E  answerable in EHRSQL only through its invented diagnosis/procedure charttime:
+       ordering two diagnoses/procedures within the same admission ("diagnosed with B
+       in the same hospital visit after A"). MIMIC-III has no such timestamps, so these
+       are expected to be unanswerable here
     D  unanswerable (EHRSQL is_impossible), minus templates that our extra tables
        (services, callout, procedureevents_mv, family-history V codes) might answer
 
@@ -61,6 +65,13 @@ _NAME_LOOKUP = re.compile(
 )
 # A patient lookup through admissions; the event tables have subject_id themselves
 _PATIENT_LOOKUP = re.compile(r"select admissions\.hadm_id from admissions where admissions\.subject_id = \d+ \)")
+# Counting patients through admissions: "count(distinct admissions.subject_id) from admissions
+# where admissions.hadm_id in (select <event>.hadm_id ...)" equals counting <event>.subject_id
+_PATIENT_COUNT = re.compile(
+    r"count\( distinct admissions\.subject_id \) from admissions where admissions\.hadm_id in \(")
+# Ordering two coded events within one admission needs their (EHRSQL-only) charttime
+_SAME_VISIT_ORDER = re.compile(r"t1\.charttime < t2\.charttime and t1\.hadm_id = t2\.hadm_id")
+_ICD_TIME = re.compile(r"(diagnoses_icd|procedures_icd)\.charttime")
 _TEXT_FILTER = re.compile(r"microbiologyevents\.(spec_type_desc|org_name) = '([^']*)'")
 _EVENT_FOR_DICT = {"d_icd_diagnoses": "diagnoses_icd", "d_icd_procedures": "procedures_icd"}
 
@@ -86,6 +97,10 @@ def convert(record: dict, loaded: set[str], con) -> dict | None:
                 "gold_sql": None, "notes": "EHRSQL is_impossible"}
 
     sql = " ".join(record["query"].lower().split())
+    if _SAME_VISIT_ORDER.search(sql) and len(_ICD_TIME.findall(sql)) >= 2:
+        return {**base, "category": "E", "answer_type": "unanswerable", "data_sources": [], "gold_columns": [],
+                "gold_sql": record["query"],
+                "notes": "Orders diagnoses/procedures within one admission; MIMIC-III has no diagnosis/procedure time"}
     # Name lookups become gold codes; the dictionary is then not required
     predicates: dict[str, list[str]] = defaultdict(list)
     for dictionary, column, name in _NAME_LOOKUP.findall(sql):
@@ -97,7 +112,7 @@ def convert(record: dict, loaded: set[str], con) -> dict | None:
     for column, value in _TEXT_FILTER.findall(sql):
         predicates[f"microbiologyevents.{column}"].append(f"LOWER(v) = '{value}'")
     stripped = _NAME_LOOKUP.sub("select 1", sql)
-    without_lookup = _PATIENT_LOOKUP.sub("select 1 )", stripped)
+    without_lookup = _PATIENT_COUNT.sub("count( distinct 1 ) where 1 in (", _PATIENT_LOOKUP.sub("select 1 )", stripped))
     optional = []
     if "admissions" not in tables_and_columns(without_lookup)[0] and tables_and_columns(without_lookup)[0]:
         optional, stripped = ["admissions"], without_lookup
@@ -137,6 +152,7 @@ def main() -> None:
     parser.add_argument("--per-template", type=int, default=1, help="Questions sampled per template")
     parser.add_argument("--limit", type=int, default=30, help="Total questions (spread over A, B, D)")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--reuse-sample", help="Re-convert the questions of an earlier sample file (same ids)")
     args = parser.parse_args()
 
     records = json.loads((SOURCE_DIR / f"{args.split}.json").read_text())
@@ -145,12 +161,22 @@ def main() -> None:
     converted = [item for item in (convert(r, loaded, con) for r in records) if item]
     con.close()
 
+    if args.reuse_sample:
+        ids = [item["id"] for item in json.loads(Path(args.reuse_sample).read_text())]
+        by_id = {item["id"]: item for item in converted}
+        sample = [by_id[i] for i in ids if i in by_id]
+        out = Path(args.reuse_sample)
+        out.write_text(json.dumps(sample, ensure_ascii=False, indent=1) + "\n")
+        print(f"Re-converted {len(sample)}/{len(ids)} questions: "
+              f"{dict((c, sum(1 for s in sample if s['category'] == c)) for c in 'ABDE')} -> {out}")
+        return
+
     # Stratified sample: per category, up to N questions per template, templates in random order
     rng = random.Random(args.seed)
     by_category: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
     for item in converted:
         by_category[item["category"]][item["ehrsql_template"]].append(item)
-    share = {"A": 0.4, "B": 0.3, "D": 0.3}
+    share = {"A": 0.4, "B": 0.3, "D": 0.2, "E": 0.1}
     sample = []
     for category, templates in sorted(by_category.items()):
         quota = round(args.limit * share[category])
@@ -164,7 +190,7 @@ def main() -> None:
     out = OUTPUT_DIR / f"ehrsql_{args.split}_sample{len(sample)}.json"
     out.write_text(json.dumps(sample, ensure_ascii=False, indent=1) + "\n")
     print(f"Usable in {args.split}: {counts} (C skipped)")
-    print(f"Sample: {dict((c, sum(1 for s in sample if s['category'] == c)) for c in 'ABD')} -> {out}")
+    print(f"Sample: {dict((c, sum(1 for s in sample if s['category'] == c)) for c in 'ABDE')} -> {out}")
 
 
 if __name__ == "__main__":

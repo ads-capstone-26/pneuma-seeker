@@ -293,6 +293,7 @@ def rescore(path: Path, questions: list[dict], dataset: str) -> None:
         question = by_id.get(record["id"])
         if question is None:
             continue
+        record["category"] = question.get("category")  # The question file is authoritative
         if not record["error"]:
             record["metrics"] = score(question, record["result"], record["candidates"])
             record["metrics"].update(code_metrics(question, record["result"], dataset, execute))

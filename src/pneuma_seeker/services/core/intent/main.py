@@ -59,6 +59,7 @@ from pneuma_seeker.services.core.intent.validator import (
     parse_join_paths,
     repairable_issues,
     to_table_info,
+    unsupported_refusal,
     validate_grounding,
 )
 from pneuma_seeker.services.core.ir_system.main import Retriever
@@ -440,6 +441,7 @@ class IntentPreparer:
     # ------------------------------------------------------------------
     def _validation_issues(self, context: PreparationContext) -> list[str]:
         issues = repairable_issues(context.grounding, context.tables)
+        issues = issues or unsupported_refusal(context.grounding, context.tables)
         if context.profile is not None and not issues:
             issues = self._value_issues(context)
         return issues

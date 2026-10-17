@@ -352,7 +352,7 @@ MIMIC_III = MimicProfile(
 - diagnoses_icd.seq_num = 1 is the primary diagnosis. admissions.diagnosis is free text, not coded.
 - Use only codes listed under code candidates: they come from the dictionaries and occur in this dataset. Once codes are chosen, the dictionary table is not required unless the answer must output the code names.
 - Age is not stored: age at admission = years between patients.dob and admissions.admittime. Patients older than 89 have shifted DOBs and appear about 300 years old; record in "assumptions" how they are handled (e.g. treat age >= 300 as "over 89").
-- All dates are shifted into the future (years ~2100-2200) per patient: calendar years and seasons are not real, but intervals within a patient are.
+- All dates are shifted into the future (years ~2100-2200) per patient: calendar years and seasons are not real, but intervals within a patient are. There is no real "now": relative times refer to the parameter current_time (see the rules). A current admission or ICU stay is one that started before current_time and has not ended by then (end time null or after current_time).
 - Death: admissions.hospital_expire_flag = 1 (or deathtime not null) = died during that admission; patients.expire_flag / dod = died at any time, including after discharge.
 - ICU data come from two systems: CareVue (2001-2008) and MetaVision (2008-2012), see icustays.dbsource. The same concept has different itemids in each system; procedureevents_mv covers MetaVision patients only.
 - icustays.los is in days; transfers.los is in hours. Care unit values: MICU, SICU, CCU, CSRU, TSICU, NICU (NICU = neonates).

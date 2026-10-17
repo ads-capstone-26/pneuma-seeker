@@ -32,6 +32,11 @@ _JOIN_LINE_RE = re.compile(
     r"^- (?P<t1>\S+) \(columns: \[(?P<c1>[^\]]+)\]\) <-> (?P<t2>\S+) "
     r"\(columns: \[(?P<c2>[^\]]+)\]\) \[score=(?P<score>[\d.]+)\]$"
 )
+# Query parameters that Figure 3 supplies at execution time (relative dates have no
+# real anchor in de-identified, date-shifted data).
+QUERY_PARAMETERS = {"current_time"}
+_PARAMETER_ALIASES = {"current time": "current_time", "now": "current_time", "current_date": "current_time",
+                      "current date": "current_time", "today": "current_time"}
 _YEAR_SUFFIX_RE = re.compile(r"^(?P<prefix>.+?)_?(?P<year>(19|20)\d{2})$")
 
 
@@ -153,7 +158,7 @@ def validate_grounding(
                 value_format=raw.get("value_format"),
                 evidence=str(raw.get("evidence") or ""),
                 confidence=_clamp(raw.get("confidence"), default=0.5),
-                derived_from=[str(t) for t in raw.get("derived_from") or [] if t],
+                derived_from=[_PARAMETER_ALIASES.get(str(t).strip().lower(), str(t)) for t in raw.get("derived_from") or [] if t],
                 ontology=raw.get("ontology") or None,
                 candidate_codes=[str(c) for c in raw.get("candidate_codes") or [] if c is not None],
             )
@@ -162,6 +167,7 @@ def validate_grounding(
     # "table.column", or another grounded derived concept (resolved to a fixpoint).
     valid_inputs = {c.term for c in concepts if c.table and c.column}
     valid_inputs |= {f"{table}.{column}" for table, columns in columns_by_table.items() for column in columns}
+    valid_inputs |= QUERY_PARAMETERS
     pending = [c for c in concepts if c.derived_from]
     changed = True
     while changed:
@@ -217,6 +223,7 @@ def ungrounded_terms(concepts: list[Concept]) -> list[str]:
         if c.role in (ConceptRole.METRIC, ConceptRole.FILTER)
         and (c.table is None or c.column is None)
         and not c.derived_from
+        and _PARAMETER_ALIASES.get(c.term.strip().lower(), c.term) not in QUERY_PARAMETERS
     ]
 
 
@@ -233,6 +240,23 @@ def repairable_issues(grounding: dict[str, Any], tables: list[TableInfo]) -> lis
     if not required_tables:
         issues.append("No required table was selected")
     return issues
+
+
+def unsupported_refusal(grounding: dict[str, Any], tables: list[TableInfo]) -> list[str]:
+    """
+    An "unanswerable" verdict that names no missing data although every metric and
+    filter is mapped to an existing column: worth one S4 repair round.
+    """
+    if grounding.get("answerable") is not False or grounding.get("missing_concepts"):
+        return []
+    concepts, _, _, _ = validate_grounding(grounding, tables)
+    if not any(c.table and c.column for c in concepts) or ungrounded_terms(concepts):
+        return []
+    return [
+        "You marked the request unanswerable, but every concept is mapped to an existing column and "
+        "\"missing_concepts\" is empty. If some required data really does not exist in the tables, list it in "
+        "\"missing_concepts\"; otherwise set \"answerable\" to true."
+    ]
 
 
 def decide(

@@ -38,6 +38,7 @@ class CodeCandidates:
     code_columns: tuple[str, ...]
     available: bool = True  # False when the event table is not loaded
     truncated: bool = False  # More codes match than are listed
+    alternative: bool = False  # Exact ICD title match outside the code system S2 chose (advisory)
     matches: list[dict[str, Any]] = field(default_factory=list)
     umls_concepts: list[dict[str, str]] = field(default_factory=list)
     search_terms: list[str] = field(default_factory=list)
@@ -109,7 +110,49 @@ class CodeLookup:
             if profile.private:  # Counts are derived from patient records: rank only, never pass on
                 candidates.matches = [{k: v for k, v in m.items() if k != "uses"} for m in candidates.matches]
             results.append(candidates)
+        results += self._exact_icd_titles(dataset_name, profile, concepts, results, available_tables)
         return results
+
+    def _exact_icd_titles(
+        self,
+        dataset: str,
+        profile: MimicProfile,
+        concepts: list[dict[str, Any]],
+        found: list[CodeCandidates],
+        available_tables: set[str],
+    ) -> list[CodeCandidates]:
+        """
+        ICD codes whose title equals a concept's term although S2 gave that concept another
+        (or no) code system, e.g. "cont inv mec ven 96+ hrs" read as an ICU item but being
+        the short title of an ICD-9 procedure. Exact matches only, offered as alternatives.
+        """
+        extra: list[CodeCandidates] = []
+        for concept in concepts:
+            term = str(concept.get("term") or "").strip()
+            if len(term) < 4:
+                continue
+            for name in ("diagnosis", "procedure"):
+                system = profile.code_systems.get(name)
+                if system is None or system.event_tables[0] not in available_tables:
+                    continue
+                if any(c.code_system == name and _same_concept(c.term, term) for c in found):
+                    continue  # Already looked up in this system
+                event, dictionary = system.event_tables[0], system.dictionary
+                rows = self._execute(f"""
+                    SELECT d.icd9_code AS code, d.long_title AS label, d.short_title, COUNT(*) AS uses,
+                           TRUE AS title_match
+                    FROM {dataset}."{dictionary}" d JOIN {dataset}."{event}" e ON e.icd9_code = d.icd9_code
+                    WHERE LOWER(d.short_title) = ? OR LOWER(d.long_title) = ?
+                    GROUP BY 1, 2, 3 ORDER BY uses DESC LIMIT 5""", [term.lower(), term.lower()])
+                if not rows:
+                    continue
+                if profile.private:
+                    rows = [{k: v for k, v in row.items() if k != "uses"} for row in rows]
+                extra.append(CodeCandidates(
+                    term=term, code_system=name, event_table=event, code_columns=system.event_code_columns,
+                    matches=rows, search_terms=[term], alternative=True,
+                ))
+        return extra
 
     def _query(
         self,
@@ -122,21 +165,25 @@ class CodeLookup:
         q = lambda table: f'{dataset}."{table}"'  # noqa: E731
         patterns = [f"%{term}%" for term in terms]
         if system.name in ("diagnosis", "procedure"):  # ICD-9 only, one code column
+            # Clinicians often use the abbreviated short_title (e.g. 'chf nos'), so search both titles.
             event, dictionary = system.event_tables[0], system.dictionary
-            title_clause = " OR ".join(["d.long_title ILIKE ?"] * len(patterns)) or "FALSE"
+            title_clause = " OR ".join(["d.long_title ILIKE ? OR d.short_title ILIKE ?"] * len(patterns)) or "FALSE"
+            exact_clause = " OR ".join(["LOWER(d.long_title) = ? OR LOWER(d.short_title) = ?"] * len(terms)) or "FALSE"
+            exact_params = [term.lower() for term in terms for _ in range(2)]
             codes = [part for source_codes in umls_codes.values() for code in source_codes if code
                      for part in _expand_code_range(code)]
             codes = [c for c in dict.fromkeys(c.replace(".", "").upper() for c in codes) if len(c) >= 2 and "-" not in c]
             code_clause = " OR ".join(["d.icd9_code LIKE ?"] * len(codes)) or "FALSE"
             code_params = [f"{code}%" for code in codes]
             sql = f"""
-                SELECT d.icd9_code AS code, d.long_title AS label, COUNT(*) AS uses,
+                SELECT d.icd9_code AS code, d.long_title AS label, d.short_title,
+                       COUNT(*) AS uses, BOOL_OR({exact_clause}) AS title_match,
                        BOOL_OR({code_clause}) AS umls_match
                 FROM {q(dictionary)} d
                 JOIN {q(event)} e ON e.icd9_code = d.icd9_code
                 WHERE ({title_clause}) OR ({code_clause})
-                GROUP BY 1, 2 ORDER BY uses DESC LIMIT {self._limit(system)}"""
-            params = code_params + patterns + code_params
+                GROUP BY 1, 2, 3 ORDER BY title_match DESC, uses DESC LIMIT {self._limit(system)}"""
+            params = exact_params + code_params + [p for pattern in patterns for p in (pattern, pattern)] + code_params
         elif system.name == "lab":
             clause = " OR ".join(["d.label ILIKE ?"] * len(patterns)) or "FALSE"
             loincs = list(dict.fromkeys(umls_codes.get("LNC", [])))
@@ -251,7 +298,7 @@ class CodeLookup:
                 )
         # Every coded concept with candidates needs a filter on its code column somewhere.
         for candidate in candidates:
-            if not candidate.matches:
+            if not candidate.matches or candidate.alternative:
                 continue
             covered = any(
                 c.table == candidate.event_table and c.column in candidate.code_columns and c.filter_values
@@ -352,8 +399,9 @@ def format_candidates(candidates: list[CodeCandidates], show_counts: bool = True
         return "(none)"
     blocks = []
     for c in candidates:
+        note = "; exact ICD title match - an alternative to the code system first assumed" if c.alternative else ""
         lines = [
-            f"## '{c.term}' ({c.code_system}; filter {c.event_table}.{'+'.join(c.code_columns)})",
+            f"## '{c.term}' ({c.code_system}; filter {c.event_table}.{'+'.join(c.code_columns)}{note})",
             f"Searched: {', '.join(c.search_terms)}",
         ]
         if not c.available:
