@@ -1,0 +1,308 @@
+{
+ "status": "ready",
+ "version": "0.1",
+ "question": "How many ICU stays with invasive mechanical ventilation lasted more than 7 days in the ICU?",
+ "dataset_name": "mimic_iii",
+ "intent_type": "aggregation",
+ "target_entity": "ICU stay",
+ "aggregation_level": "single_value",
+ "output_spec": {
+  "answer_type": "number",
+  "description": "Count of ICU stays where invasive mechanical ventilation was used and the ICU length of stay exceeded seven days",
+  "unit": null,
+  "rounding": null
+ },
+ "concepts": [
+  {
+   "term": "ICU stay",
+   "role": "entity",
+   "table": "icustays",
+   "column": "icustay_id",
+   "filter_values": [],
+   "value_format": null,
+   "evidence": "icustays table description: one row per ICU stay; icustay_id is the unique key",
+   "confidence": 1.0,
+   "derived_from": [],
+   "ontology": null,
+   "candidate_codes": []
+  },
+  {
+   "term": "invasive mechanical ventilation",
+   "role": "filter",
+   "table": "procedureevents_mv",
+   "column": "itemid",
+   "filter_values": [
+    225792
+   ],
+   "value_format": "BIGINT",
+   "evidence": "d_items lists itemid=225792 as 'Invasive Ventilation', category=2-Ventilation, linksto=procedureevents_mv",
+   "confidence": 0.9,
+   "derived_from": [],
+   "ontology": "icu_item",
+   "candidate_codes": [
+    "225792"
+   ]
+  },
+  {
+   "term": "length of stay",
+   "role": "filter",
+   "table": "icustays",
+   "column": "los",
+   "filter_values": [
+    7
+   ],
+   "value_format": "DOUBLE",
+   "evidence": "icustays.los is defined as ICU length of stay in fractional days",
+   "confidence": 1.0,
+   "derived_from": [],
+   "ontology": null,
+   "candidate_codes": []
+  }
+ ],
+ "temporal_constraints": {},
+ "required_tables": [
+  "icustays",
+  "procedureevents_mv"
+ ],
+ "tables": [
+  {
+   "name": "icustays",
+   "path": "mimic_iii.\"icustays\"",
+   "description": "One row per ICU stay: care units, ICU in/out times, length of stay, and source system.",
+   "columns": [
+    {
+     "name": "row_id",
+     "type": "BIGINT",
+     "description": "Row number within this table; not an identifier, never use it for joins"
+    },
+    {
+     "name": "subject_id",
+     "type": "BIGINT",
+     "description": "Patient identifier (PATIENTS)"
+    },
+    {
+     "name": "hadm_id",
+     "type": "BIGINT",
+     "description": "Hospital admission identifier (ADMISSIONS)"
+    },
+    {
+     "name": "icustay_id",
+     "type": "BIGINT",
+     "description": "ICU stay identifier (unique per row)"
+    },
+    {
+     "name": "dbsource",
+     "type": "VARCHAR",
+     "description": "ICU documentation system: 'carevue' (2001-2008), 'metavision' (2008-2012), or 'both'"
+    },
+    {
+     "name": "first_careunit",
+     "type": "VARCHAR",
+     "description": "First ICU type: 'MICU' (medical), 'SICU' (surgical), 'CCU' (coronary care), 'CSRU' (cardiac surgery recovery), 'TSICU' (trauma surgical), 'NICU' (neonatal)"
+    },
+    {
+     "name": "last_careunit",
+     "type": "VARCHAR",
+     "description": "Last ICU type (same values as first_careunit)"
+    },
+    {
+     "name": "first_wardid",
+     "type": "BIGINT",
+     "description": "First ward (physical location) identifier"
+    },
+    {
+     "name": "last_wardid",
+     "type": "BIGINT",
+     "description": "Last ward identifier"
+    },
+    {
+     "name": "intime",
+     "type": "TIMESTAMP",
+     "description": "ICU admission time"
+    },
+    {
+     "name": "outtime",
+     "type": "TIMESTAMP",
+     "description": "ICU discharge time"
+    },
+    {
+     "name": "los",
+     "type": "DOUBLE",
+     "description": "ICU length of stay in fractional days"
+    }
+   ],
+   "sample_rows": []
+  },
+  {
+   "name": "procedureevents_mv",
+   "path": "mimic_iii.\"procedureevents_mv\"",
+   "description": "Procedures documented in the ICU (MetaVision patients only, 2008-2012), e.g. ventilation, dialysis, line insertion, imaging, with start and end times.",
+   "columns": [
+    {
+     "name": "row_id",
+     "type": "BIGINT",
+     "description": "Row number within this table; not an identifier, never use it for joins"
+    },
+    {
+     "name": "subject_id",
+     "type": "BIGINT",
+     "description": "Patient identifier (PATIENTS)"
+    },
+    {
+     "name": "hadm_id",
+     "type": "BIGINT",
+     "description": "Hospital admission identifier (ADMISSIONS)"
+    },
+    {
+     "name": "icustay_id",
+     "type": "BIGINT",
+     "description": "ICU stay identifier (ICUSTAYS)"
+    },
+    {
+     "name": "starttime",
+     "type": "TIMESTAMP",
+     "description": "Procedure start time"
+    },
+    {
+     "name": "endtime",
+     "type": "TIMESTAMP",
+     "description": "Procedure end time"
+    },
+    {
+     "name": "itemid",
+     "type": "BIGINT",
+     "description": "Procedure item (names in d_items, linksto = 'procedureevents_mv')"
+    },
+    {
+     "name": "value",
+     "type": "DOUBLE",
+     "description": "Amount or duration"
+    },
+    {
+     "name": "valueuom",
+     "type": "VARCHAR",
+     "description": "Unit of value, e.g. 'min', 'None'"
+    },
+    {
+     "name": "location",
+     "type": "VARCHAR",
+     "description": "Body location"
+    },
+    {
+     "name": "locationcategory",
+     "type": "VARCHAR",
+     "description": "Location category"
+    },
+    {
+     "name": "storetime",
+     "type": "TIMESTAMP",
+     "description": "Time the event was recorded"
+    },
+    {
+     "name": "cgid",
+     "type": "BIGINT",
+     "description": "Caregiver identifier (CAREGIVERS)"
+    },
+    {
+     "name": "orderid",
+     "type": "BIGINT",
+     "description": "Order identifier"
+    },
+    {
+     "name": "linkorderid",
+     "type": "BIGINT",
+     "description": "Links related orders"
+    },
+    {
+     "name": "ordercategoryname",
+     "type": "VARCHAR",
+     "description": "Order category"
+    },
+    {
+     "name": "secondaryordercategoryname",
+     "type": "VARCHAR",
+     "description": "Secondary order category"
+    },
+    {
+     "name": "ordercategorydescription",
+     "type": "VARCHAR",
+     "description": "Order type description"
+    },
+    {
+     "name": "isopenbag",
+     "type": "BIGINT",
+     "description": "Open bag flag"
+    },
+    {
+     "name": "continueinnextdept",
+     "type": "BIGINT",
+     "description": "Continued in the next department"
+    },
+    {
+     "name": "cancelreason",
+     "type": "BIGINT",
+     "description": "Cancellation reason code"
+    },
+    {
+     "name": "statusdescription",
+     "type": "VARCHAR",
+     "description": "Status, e.g. 'FinishedRunning', 'Stopped'"
+    },
+    {
+     "name": "comments_editedby",
+     "type": "VARCHAR",
+     "description": "Editor role"
+    },
+    {
+     "name": "comments_canceledby",
+     "type": "VARCHAR",
+     "description": "Canceller role"
+    },
+    {
+     "name": "comments_date",
+     "type": "TIMESTAMP",
+     "description": "Comment time"
+    }
+   ],
+   "sample_rows": []
+  }
+ ],
+ "schema_mapping": {
+  "icustays": {
+   "icustay_id": "icustay_id",
+   "los": "los"
+  },
+  "procedureevents_mv": {
+   "icustay_id": "icustay_id",
+   "itemid": "itemid"
+  }
+ },
+ "join_paths": [
+  {
+   "left_table": "icustays",
+   "left_column": "icustay_id",
+   "right_table": "procedureevents_mv",
+   "right_column": "icustay_id",
+   "score": 1.0
+  }
+ ],
+ "assumptions": {
+  "more_than_7_days": "Use icustays.los strictly greater than 7",
+  "ventilation_data": "Count only procedureevents_mv records (MetaVision system) for invasive ventilation; CareVue data not included",
+  "ambiguity_1": "Definition of “more than 7 days” -> strictly >7×24 hours (icustays.los >7)"
+ },
+ "memory_used": [],
+ "reasoning_confidence_score": 0.85,
+ "ambiguity_markers": [],
+ "clarification_policy": {
+  "trigger": false,
+  "reason": "Resolved without user input; see assumptions.",
+  "clarification_question": "",
+  "threshold": 0.7
+ },
+ "answerability": {
+  "status": "answerable",
+  "reason": "",
+  "missing_concepts": []
+ }
+}
