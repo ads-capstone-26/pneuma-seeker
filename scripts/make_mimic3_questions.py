@@ -5,9 +5,9 @@ Builds a DRAFT Figure 2 evaluation set for the team's MIMIC-III dataset
 data_src/<dataset>/<dataset>_tabular.json plus gold_columns, gold_sql, notes,
 and status ("draft" until reviewed by the team).
 
-Questions only use the tables that are loaded (no LABEVENTS, PRESCRIPTIONS,
-CHARTEVENTS, INPUT/OUTPUTEVENTS yet); questions that need those tables are
-"unanswerable" on purpose.
+Questions only use the tables that are loaded in the team's 21-table copy (no
+LABEVENTS, CHARTEVENTS, NOTEEVENTS, INPUTEVENTS_MV, OUTPUTEVENTS); questions that
+need those tables are "unanswerable" on purpose.
 
 Answers are computed locally by gold_sql and written to the git-ignored
 data_src/mimic_iii/ only. Nothing derived from the data is printed: they are
@@ -217,12 +217,14 @@ QUESTIONS = [
         "notes": "Needs LABEVENTS (not loaded); D_LABITEMS alone has no results.",
     },
     {
-        "id": "mimic3-unanswerable-2",
+        "id": "mimic3-medium-9",
         "query": "How many patients were prescribed vancomycin?",
-        "answer_type": "unanswerable",
-        "gold_columns": [],
-        "gold_sql": None,
-        "notes": "Needs PRESCRIPTIONS (not loaded). microbiologyevents.ab_name = 'VANCOMYCIN' is a sensitivity test, not a prescription.",
+        "answer_type": "numeric_exact",
+        "gold_columns": ["prescriptions.subject_id", "prescriptions.drug"],
+        "gold_sql": """SELECT COUNT(DISTINCT subject_id) FROM prescriptions
+                       WHERE drug LIKE '%Vancomycin%' OR drug LIKE '%vancomycin%' OR drug LIKE '%VANCOMYCIN%'""",
+        "notes": "Any drug name containing vancomycin (all forms and routes). microbiologyevents.ab_name = 'VANCOMYCIN' "
+                 "is a sensitivity test, not a prescription, and must not be used.",
     },
     {
         "id": "mimic3-unanswerable-3",

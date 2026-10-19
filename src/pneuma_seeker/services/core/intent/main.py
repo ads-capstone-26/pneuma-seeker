@@ -49,6 +49,7 @@ from pneuma_seeker.services.core.intent.code_lookup import (
     CodeCandidates,
     CodeLookup,
     format_candidates,
+    refusal_title_issues,
 )
 from pneuma_seeker.services.core.intent.mimic_profile import MimicProfile, get_profile
 from pneuma_seeker.services.core.intent.prompt_factory import IntentPromptFactory
@@ -220,7 +221,8 @@ class IntentPreparer:
         start = time()
         if profile:
             context.code_candidates = self.code_lookup.lookup(
-                dataset_name, profile, context.interpretation.get("concepts") or [], context.available_tables
+                dataset_name, profile, context.interpretation.get("concepts") or [], context.available_tables,
+                question=question,
             )
         context.timings["codes"] = time() - start
 
@@ -442,6 +444,7 @@ class IntentPreparer:
     def _validation_issues(self, context: PreparationContext) -> list[str]:
         issues = repairable_issues(context.grounding, context.tables)
         issues = issues or unsupported_refusal(context.grounding, context.tables)
+        issues = issues or refusal_title_issues(context.grounding, context.code_candidates)
         if context.profile is not None and not issues:
             issues = self._value_issues(context)
         return issues

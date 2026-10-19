@@ -47,7 +47,7 @@ TABLES = [
     "NOTEEVENTS", "CHARTEVENTS", "DATETIMEEVENTS", "INPUTEVENTS_CV", "INPUTEVENTS_MV",
     "OUTPUTEVENTS", "PROCEDUREEVENTS_MV", "D_ITEMS",
 ]
-TEXT_COLUMNS = {"icd9_code", "drg_code", "loinc_code", "cpt_cd"}  # Codes that look numeric but are text
+TEXT_COLUMNS = {"icd9_code", "drg_code", "loinc_code", "cpt_cd", "ndc", "gsn", "formulary_drug_cd"}  # Codes that look numeric but are text
 
 
 def link_tables() -> tuple[list[str], list[str]]:

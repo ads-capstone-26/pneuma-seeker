@@ -38,7 +38,9 @@ class CodeCandidates:
     code_columns: tuple[str, ...]
     available: bool = True  # False when the event table is not loaded
     truncated: bool = False  # More codes match than are listed
+    family_sizes: dict[str, int] = field(default_factory=dict)  # 3-character ICD family -> codes in the dictionary
     alternative: bool = False  # Exact ICD title match outside the code system S2 chose (advisory)
+    meaning: str = ""  # What a code of this system denotes (shown in the prompt)
     matches: list[dict[str, Any]] = field(default_factory=list)
     umls_concepts: list[dict[str, str]] = field(default_factory=list)
     search_terms: list[str] = field(default_factory=list)
@@ -61,6 +63,7 @@ class CodeLookup:
         self.db_api = db_api
         self.umls = umls
         self.max_matches = max_matches
+        self._title_cache: dict[tuple[str, str], list[tuple[str, str, str]]] = {}
         self.max_icd_matches = max_icd_matches
 
     # ------------------------------------------------------------------
@@ -72,6 +75,7 @@ class CodeLookup:
         profile: MimicProfile,
         concepts: list[dict[str, Any]],
         available_tables: set[str],
+        question: str = "",
     ) -> list[CodeCandidates]:
         """Candidates for every S2 concept that names a code system."""
         results: list[CodeCandidates] = []
@@ -86,6 +90,7 @@ class CodeLookup:
                 code_system=system.name,
                 event_table=(loaded or system.event_tables)[0],
                 code_columns=system.event_code_columns,
+                meaning=system.description,
             )
             if not loaded:
                 candidates.available = False
@@ -105,13 +110,69 @@ class CodeLookup:
                     dataset_name, system, candidates.search_terms, umls_codes, available_tables
                 )
                 candidates.truncated = len(candidates.matches) >= self._limit(system)
+                if candidates.truncated and system.name in ("diagnosis", "procedure"):
+                    candidates.family_sizes = self._family_sizes(dataset_name, system, candidates.matches)
             except Exception as exc:
                 self.__log(f"Code lookup failed for '{term}': {exc}")
             if profile.private:  # Counts are derived from patient records: rank only, never pass on
                 candidates.matches = [{k: v for k, v in m.items() if k != "uses"} for m in candidates.matches]
             results.append(candidates)
         results += self._exact_icd_titles(dataset_name, profile, concepts, results, available_tables)
+        if question:
+            results += self._spot_titles(dataset_name, profile, question, results, available_tables)
         return results
+
+    def _spot_titles(
+        self,
+        dataset: str,
+        profile: MimicProfile,
+        question: str,
+        found: list[CodeCandidates],
+        available_tables: set[str],
+        max_titles: int = 5,
+    ) -> list[CodeCandidates]:
+        """
+        ICD titles that appear verbatim in the question. Clinicians write abbreviated short
+        titles ("nonrupt cerebral aneurym"), which S2 may rewrite into full words that no
+        dictionary search matches; the question text keeps them. Whole-word, case-insensitive
+        matches of at least 8 characters; a title inside a longer matched title is dropped.
+        """
+        text = " " + " ".join(question.lower().split()) + " "
+        known = {str(m["code"]) for c in found for m in c.matches if m.get("title_match")}
+        extra: list[CodeCandidates] = []
+        for name in ("diagnosis", "procedure"):
+            system = profile.code_systems.get(name)
+            if system is None or system.event_tables[0] not in available_tables:
+                continue
+            hits: dict[str, list[dict[str, Any]]] = {}
+            for code, short_title, long_title in self._titles(dataset, system):
+                for title in {short_title.lower().strip(), long_title.lower().strip()}:
+                    if len(title) >= 8 and title in text and re.search(
+                        r"(?<![a-z0-9])" + re.escape(title) + r"(?![a-z0-9])", text
+                    ):
+                        hits.setdefault(title, []).append(
+                            {"code": code, "label": long_title, "short_title": short_title, "title_match": True})
+            kept = [t for t in hits if not any(t != other and t in other for other in hits)]
+            for title in sorted(kept, key=len, reverse=True)[:max_titles]:
+                rows = [row for row in hits[title] if row["code"] not in known]
+                if rows:
+                    extra.append(CodeCandidates(
+                        term=title, code_system=name, event_table=system.event_tables[0],
+                        code_columns=system.event_code_columns, matches=rows, search_terms=[title],
+                        alternative=True, meaning=system.description,
+                    ))
+        return extra
+
+    def _titles(self, dataset: str, system: CodeSystem) -> list[tuple[str, str, str]]:
+        """(code, short_title, long_title) of dictionary codes that occur in the event table; cached."""
+        key = (dataset, system.name)
+        if key not in self._title_cache:
+            rows = self._execute(f"""
+                SELECT DISTINCT d.icd9_code AS code, d.short_title, d.long_title
+                FROM {dataset}."{system.dictionary}" d
+                WHERE d.icd9_code IN (SELECT DISTINCT icd9_code FROM {dataset}."{system.event_tables[0]}")""", [])
+            self._title_cache[key] = [(str(r["code"]), str(r["short_title"] or ""), str(r["long_title"] or "")) for r in rows]
+        return self._title_cache[key]
 
     def _exact_icd_titles(
         self,
@@ -122,15 +183,32 @@ class CodeLookup:
         available_tables: set[str],
     ) -> list[CodeCandidates]:
         """
-        ICD codes whose title equals a concept's term although S2 gave that concept another
-        (or no) code system, e.g. "cont inv mec ven 96+ hrs" read as an ICU item but being
-        the short title of an ICD-9 procedure. Exact matches only, offered as alternatives.
+        Codes whose title (or stored value) equals a concept's term although S2 gave that
+        concept another (or no) code system, e.g. "cont inv mec ven 96+ hrs" read as an ICU
+        item but being the short title of an ICD-9 procedure, or "MRSA screen" read as a lab
+        test but being a microbiology specimen type. Exact matches only, offered as alternatives.
         """
         extra: list[CodeCandidates] = []
         for concept in concepts:
             term = str(concept.get("term") or "").strip()
             if len(term) < 4:
                 continue
+            for name, system in profile.code_systems.items():
+                if system.dictionary is None and system.event_tables[0] in available_tables \
+                        and not any(c.code_system == name and _same_concept(c.term, term) for c in found):
+                    column = system.event_code_columns[0]
+                    rows = self._execute(f"""
+                        SELECT "{column}" AS code, COUNT(*) AS uses, TRUE AS title_match
+                        FROM {dataset}."{system.event_tables[0]}" WHERE LOWER("{column}") = ?
+                        GROUP BY 1 ORDER BY uses DESC LIMIT 5""", [term.lower()])
+                    if rows:
+                        if profile.private:
+                            rows = [{k: v for k, v in row.items() if k != "uses"} for row in rows]
+                        extra.append(CodeCandidates(
+                            term=term, code_system=name, event_table=system.event_tables[0],
+                            code_columns=system.event_code_columns, matches=rows, search_terms=[term],
+                            alternative=True, meaning=system.description,
+                        ))
             for name in ("diagnosis", "procedure"):
                 system = profile.code_systems.get(name)
                 if system is None or system.event_tables[0] not in available_tables:
@@ -150,7 +228,7 @@ class CodeLookup:
                     rows = [{k: v for k, v in row.items() if k != "uses"} for row in rows]
                 extra.append(CodeCandidates(
                     term=term, code_system=name, event_table=event, code_columns=system.event_code_columns,
-                    matches=rows, search_terms=[term], alternative=True,
+                    matches=rows, search_terms=[term], alternative=True, meaning=system.description,
                 ))
         return extra
 
@@ -336,6 +414,16 @@ class CodeLookup:
                 notes.append(f"Concept '{concept.term}': UMLS also links codes {uncovered[:10]}, not chosen")
         return notes
 
+    def _family_sizes(self, dataset: str, system: CodeSystem, matches: list[dict[str, Any]]) -> dict[str, int]:
+        """How many codes each 3-character ICD family has in the dictionary (dictionary only, no patient data)."""
+        prefixes = sorted({str(m["code"])[:3] for m in matches})
+        rows = self._execute(
+            f"""SELECT SUBSTR(icd9_code, 1, 3) AS family, COUNT(*) AS n FROM {dataset}."{system.dictionary}"
+                WHERE SUBSTR(icd9_code, 1, 3) IN ({", ".join("?" for _ in prefixes)}) GROUP BY 1 ORDER BY 1""",
+            prefixes,
+        )
+        return {str(row["family"]): int(row["n"]) for row in rows}
+
     def _limit(self, system: CodeSystem) -> int:
         return self.max_icd_matches if system.name in ("diagnosis", "procedure") else self.max_matches
 
@@ -372,6 +460,44 @@ def _expand_code_range(code: str, max_span: int = 10) -> list[str]:
     return [f"{letter}{number:0{len(start)}d}" for number in range(int(start), int(end) + 1)]
 
 
+def refusal_title_issues(grounding: dict[str, Any], candidates: list[CodeCandidates]) -> list[str]:
+    """
+    An "unanswerable" verdict for a concept whose phrase exactly matches a code title or a
+    stored value that occurs in the data (e.g. "long-term use anticoagul" read as a
+    medication, although it is the short title of diagnosis V58.61): worth one S4 repair round.
+    """
+    if grounding.get("answerable") is not False:
+        return []
+    missing = [str(m) for m in grounding.get("missing_concepts") or []]
+    reason = str(grounding.get("unanswerable_reason") or "").lower()
+    issues = []
+    for c in candidates:
+        exact = [m for m in c.matches if m.get("title_match")]
+        if not exact:
+            continue
+        named = (any(_same_concept(c.term, m) or _word_overlap(c.term, m) for m in missing)
+                 or c.term.lower() in reason or not missing)
+        if not named:
+            continue
+        codes = ", ".join(
+            f"{m['code']} ({m.get('short_title') or m.get('label')})" if m.get("short_title") or m.get("label")
+            else f"'{m['code']}'" for m in exact[:5]
+        )
+        issues.append(
+            f"'{c.term}' exactly matches {c.code_system} value(s) {codes}, which occur in "
+            f"{c.event_table}.{c.code_columns[0]}: map the concept there instead of declaring it missing, "
+            "then re-check whether the request is answerable."
+        )
+    return issues
+
+
+def _word_overlap(title: str, phrase: str, threshold: float = 0.6) -> bool:
+    """True if most words of `title` start like a word of `phrase` ("aneurym" ~ "aneurysm")."""
+    stems = lambda text: {w[:4] for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) >= 3}  # noqa: E731
+    title_stems = stems(title)
+    return bool(title_stems) and len(title_stems & stems(phrase)) / len(title_stems) >= threshold
+
+
 def _like(pattern: str, value: str) -> bool:
     """Case-insensitive SQL LIKE ('%' and '_' wildcards); a plain value must match exactly."""
     regex = "".join(".*" if ch == "%" else "." if ch == "_" else re.escape(ch) for ch in pattern.upper())
@@ -399,9 +525,10 @@ def format_candidates(candidates: list[CodeCandidates], show_counts: bool = True
         return "(none)"
     blocks = []
     for c in candidates:
-        note = "; exact ICD title match - an alternative to the code system first assumed" if c.alternative else ""
+        note = "; exact title/value match - an alternative to the code system first assumed" if c.alternative else ""
+        meaning = f": {c.meaning}" if c.meaning else ""
         lines = [
-            f"## '{c.term}' ({c.code_system}; filter {c.event_table}.{'+'.join(c.code_columns)}{note})",
+            f"## '{c.term}' ({c.code_system}{meaning}; filter {c.event_table}.{'+'.join(c.code_columns)}{note})",
             f"Searched: {', '.join(c.search_terms)}",
         ]
         if not c.available:
@@ -418,6 +545,9 @@ def format_candidates(candidates: list[CodeCandidates], show_counts: bool = True
                     "family, use LIKE patterns on the code column: '%' = any characters, '_' = exactly one, "
                     "e.g. '250%' or '410_1'.)"
                 )
+                if c.family_sizes:
+                    lines.append("Code families among the matches (codes per family in the dictionary): "
+                                 + ", ".join(f"{family}: {n}" for family, n in c.family_sizes.items()))
             for m in c.matches:
                 details = ", ".join(f"{k}={v}" for k, v in m.items() if k not in ("code", "uses") and v not in (None, ""))
                 lines.append(f"- {m['code']} | {details}" + (f" | uses={m['uses']}" if show_counts else ""))

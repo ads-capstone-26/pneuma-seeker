@@ -335,10 +335,11 @@ MIMIC_III = MimicProfile(
                                 "procedureevents_mv", "datetimeevents"),
                    ("itemid",), "d_items", ("itemid",), "label", (),
                    "an ICU vital sign, charted item, fluid input/output, or ICU procedure such as ventilation"),
-        CodeSystem("medication", ("prescriptions",), ("drug",), None, (), "drug", ("RXNORM",), "a drug"),
+        CodeSystem("medication", ("prescriptions",), ("drug",), None, (), "drug", ("RXNORM",),
+                   "a drug ordered for the patient (prescriptions)"),
         CodeSystem("organism", ("microbiologyevents",), ("org_name",), None, (), "org_name", (), "a microorganism grown in a culture"),
-        CodeSystem("specimen", ("microbiologyevents",), ("spec_type_desc",), None, (), "spec_type_desc", (), "a microbiology specimen type"),
-        CodeSystem("antibiotic", ("microbiologyevents",), ("ab_name",), None, (), "ab_name", (), "an antibiotic tested for sensitivity"),
+        CodeSystem("specimen", ("microbiologyevents",), ("spec_type_desc",), None, (), "spec_type_desc", (), "a microbiology specimen or culture type (e.g. blood culture, MRSA screen)"),
+        CodeSystem("antibiotic", ("microbiologyevents",), ("ab_name",), None, (), "ab_name", (), "an antibiotic tested against a cultured organism (a lab sensitivity test, not a drug given to the patient)"),
     )},
     key_columns=("icustay_id", "hadm_id", "subject_id", "cgid"),
     private=True,
@@ -350,6 +351,10 @@ MIMIC_III = MimicProfile(
 - Counting: "how many patients" counts DISTINCT subject_id; "how many admissions" counts DISTINCT hadm_id; "how many ICU stays" counts DISTINCT icustay_id. A concept like "admission records" is the table's rows: ground it to the table's key column.
 - Diagnoses and procedures use ICD-9-CM only, in the icd9_code column (there is no icd_version), stored as text WITHOUT dots: 250.00 is '25000', 401.9 is '4019', V45.81 is 'V4581', procedure 96.71 is '9671'. A code family is a prefix pattern, e.g. '250%' (diabetes mellitus), '410%' (acute myocardial infarction), '428%' (heart failure).
 - diagnoses_icd.seq_num = 1 is the primary diagnosis. admissions.diagnosis is free text, not coded.
+- diagnoses_icd and procedures_icd have no time column. Date a diagnosis or procedure by its admission (admissions.admittime, or dischtime) and record this approximation in "assumptions": questions about when a diagnosis or procedure happened, time since it, or time windows between events in different admissions are answerable at admission level. Only the order of two diagnoses or procedures within the same admission cannot be determined (e.g. "B after A during the same hospital visit"); a request that needs it is unanswerable even though both codes exist, with "diagnosis/procedure time" in "missing_concepts".
+- Microbiology tests, cultures, and specimens (including screens such as MRSA screen) are in microbiologyevents (spec_type_desc, org_name, ab_name), not in labevents.
+- The dictionaries map abbreviated short titles to full long titles (d_icd_diagnoses, d_icd_procedures): a question asking what an abbreviated diagnosis or procedure name stands for, or what a code means, is answered from them.
+- Every event table has subject_id (and hadm_id): count or filter patients there. Include patients only when patient attributes are needed (gender, dob, dod, expire_flag).
 - Use only codes listed under code candidates: they come from the dictionaries and occur in this dataset. Once codes are chosen, the dictionary table is not required unless the answer must output the code names.
 - Age is not stored: age at admission = years between patients.dob and admissions.admittime. Patients older than 89 have shifted DOBs and appear about 300 years old; record in "assumptions" how they are handled (e.g. treat age >= 300 as "over 89").
 - All dates are shifted into the future (years ~2100-2200) per patient: calendar years and seasons are not real, but intervals within a patient are. There is no real "now": relative times refer to the parameter current_time (see the rules). A current admission or ICU stay is one that started before current_time and has not ended by then (end time null or after current_time).
