@@ -191,6 +191,7 @@ def main() -> None:
     parser.add_argument("--tag", default="", help="Label added to the output file name")
     parser.add_argument("--rescore", help="Recompute metrics for an earlier results file (no LLM calls)")
     parser.add_argument("--questions", help="Question file (default: data_src/<dataset>/<dataset>_tabular.json)")
+    parser.add_argument("--save-specs", help="Directory to write each result (full) and its Figure 3 view as JSON")
     parser.add_argument("--allow-private-llm", action="store_true",
                         help="Allow credentialed datasets (MIMIC-III): only with an LLM endpoint approved under the PhysioNet DUA")
     args = parser.parse_args()
@@ -220,6 +221,8 @@ def main() -> None:
                       "error": None}
             try:
                 result = preparer.prepare(question["query"], args.dataset)
+                if args.save_specs:
+                    _save_spec(Path(args.save_specs), question, result)
                 result_dict = result.model_dump(mode="json", exclude={"tables"})
                 context = preparer.last_context
                 candidates = [table.name for table in context.tables]
@@ -263,6 +266,15 @@ def main() -> None:
     summary = summarize(records)
     print("\nSUMMARY " + json.dumps(summary))
     print(f"Per-question results: {out_path}")
+
+
+def _save_spec(directory: Path, question: dict, result) -> None:
+    """One JSON per question: the full Figure 2 result and, for an IntentSpec, its Figure 3 view."""
+    directory.mkdir(parents=True, exist_ok=True)
+    payload = {"id": question["id"], "question": question["query"], "result": result.model_dump(mode="json")}
+    if hasattr(result, "to_figure3_view"):
+        payload["figure3_view"] = result.to_figure3_view()
+    (directory / f"{question['id']}.json").write_text(json.dumps(payload, ensure_ascii=False, indent=1, default=str))
 
 
 def _code_text(metrics: dict) -> str:
