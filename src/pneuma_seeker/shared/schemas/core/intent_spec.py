@@ -131,6 +131,9 @@ class IntentSpec(BaseModel):
     join_paths: list[JoinPath] = Field(default_factory=list)
     # Explicit interpretation choices, e.g. {"year_boundary": "inclusive"}
     assumptions: dict[str, Any] = Field(default_factory=dict)
+    # Figure 1 query conventions that apply to required_tables: [{"id": ..., "rule": ...}].
+    # Figure 3 must follow them when writing SQL (e.g. COUNT DISTINCT on tables with duplicate rows).
+    query_conventions: list[dict[str, str]] = Field(default_factory=list)
 
     memory_used: list[str] = Field(default_factory=list)  # memory_id values
     reasoning_confidence_score: float = Field(ge=0.0, le=1.0)
@@ -217,6 +220,7 @@ class IntentSpec(BaseModel):
                 for path in self.join_paths
             ],
             "assumptions": self.assumptions,
+            "query_conventions": self.query_conventions,
         }
 
     def to_figure3_inputs(self) -> tuple[dict[str, Any], dict[str, dict[str, str]], dict[str, Any]]:

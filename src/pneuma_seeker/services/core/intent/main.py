@@ -72,6 +72,7 @@ from pneuma_seeker.shared.schemas.core.intent_spec import (
     Figure2Result,
     JoinPath,
     ColumnInfo,
+    IntentSpec,
     TableInfo,
 )
 from pneuma_seeker.shared.schemas.core.ir_system import AbstractDocument, RetrieverType
@@ -130,6 +131,7 @@ class IntentPreparer:
         self.max_partition_tables = max_partition_tables
         self.clarification_threshold = clarification_threshold
         self.allow_private_llm = allow_private_llm
+        self._snapshot_checked: set[str] = set()
 
         self.retriever = Retriever(user_id, chat_id, config, logger, db_api, language_model_api)
         self.join_path_extraction = JoinPathExtraction(
@@ -173,6 +175,8 @@ class IntentPreparer:
             and previous.question == question
             and previous.dataset_name == dataset_name
         )
+        if profile is not None:
+            self._check_snapshot(dataset_name)
         context = PreparationContext(question=question, dataset_name=dataset_name, profile=profile)
         context.available_tables = set(self._table_layouts(dataset_name)) if profile else set()
 
@@ -281,6 +285,9 @@ class IntentPreparer:
             self.clarification_threshold,
             value_issues=value_issues,
         )
+        if profile is not None and isinstance(result, IntentSpec):
+            # Figure 3 follows the Figure 1 conventions that apply to the tables it will query
+            result = result.model_copy(update={"query_conventions": profile.conventions_for(result.required_tables)})
         self.__log(f"Result: {result.status} (timings: { {k: round(v, 1) for k, v in context.timings.items()} })")
         return result
 
@@ -410,8 +417,27 @@ class IntentPreparer:
     def _domain_notes(self, context: PreparationContext) -> str:
         if context.profile is None:
             return ""
-        unavailable = context.profile.unavailable_notes(context.available_tables)
-        return context.profile.domain_notes + (f"\n\n{unavailable}" if unavailable else "")
+        notes = [context.profile.domain_notes,
+                 context.profile.conventions_notes(context.available_tables),
+                 context.profile.unavailable_notes(context.available_tables)]
+        return "\n\n".join(note for note in notes if note)
+
+    def _check_snapshot(self, dataset_name: str) -> None:
+        """Warns once per dataset if the local data differ from Figure 1's shared snapshot."""
+        if dataset_name in self._snapshot_checked:
+            return
+        self._snapshot_checked.add(dataset_name)
+        try:
+            from pneuma_seeker.services.core.data_prep.paths import dataset_db_path
+            from pneuma_seeker.services.core.data_prep.snapshot import compare_with_snapshot
+            result = compare_with_snapshot(dataset_db_path())
+        except Exception as exc:  # Figure 1 module or snapshot not available
+            self.__log(f"Snapshot check skipped: {exc}")
+            return
+        if result.status != "match":
+            self.logger.warning(result.message())
+        else:
+            self.__log(result.message())
 
     def _table_layouts(self, dataset_name: str) -> dict[str, tuple[str, ...]]:
         """Ordered column names of every table in the dataset (one metadata query)."""

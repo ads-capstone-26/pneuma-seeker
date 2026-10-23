@@ -1,7 +1,7 @@
 # scripts/make_mimic3_questions.py
 """
 Builds a DRAFT Figure 2 evaluation set for the team's MIMIC-III dataset
-("mimic_iii", see build_mimic3.py), in the format of
+("mimic_iii", built by scripts/prepare_mimic3.py), in the format of
 data_src/<dataset>/<dataset>_tabular.json plus gold_columns, gold_sql, notes,
 and status ("draft" until reviewed by the team).
 

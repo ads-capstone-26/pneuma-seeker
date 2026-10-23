@@ -8,10 +8,19 @@ column descriptions paraphrased from the public documentation
 Datasets named mimic_iii* (or mimic3*) get this profile; MIMIC-III is
 credentialed, so the profile is "private".
 
+When Figure 1's shared files are present (docs/mimic3/, written by
+scripts/prepare_mimic3.py publish), they take precedence: table and column
+descriptions and column roles come from mimic3_schema_profile.json, and the query
+conventions from mimic3_query_conventions.json. Only descriptive text and rule text
+are used; the measured counts, percentages and category value frequencies in those
+files never reach a prompt. The built-in descriptions below are the fallback.
+
 A private profile keeps patient-level data out of LLM prompts: no sample rows
 and no usage counts (see IntentPreparer and CodeLookup).
 """
-from dataclasses import dataclass, field
+import json
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 
 from pneuma_seeker.shared.schemas.core.intent_spec import JoinPath
 
@@ -39,6 +48,9 @@ class MimicProfile:
     private: bool = False  # credentialed data: no patient-level values in prompts
     catalog: bool = False  # small fixed schema: every table is a candidate (no index needed)
     table_docs: dict[str, tuple[str, dict[str, str]]] = field(default_factory=dict)
+    # Figure 1 query conventions: {"id", "rule", "tables"} (tables the rule applies to)
+    conventions: tuple[dict, ...] = ()
+    knowledge_source: str = "built-in documentation"
 
     @property
     def code_columns(self) -> set[str]:
@@ -63,6 +75,18 @@ class MimicProfile:
                         paths.append(JoinPath(left_table=event_table, left_column=event_column,
                                               right_table=system.dictionary, right_column=dict_column, score=1.0))
         return paths
+
+    def conventions_for(self, tables: list[str] | set[str]) -> list[dict[str, str]]:
+        """Conventions that apply to any of the given tables, as {"id", "rule"}."""
+        wanted = set(tables)
+        return [{"id": c["id"], "rule": c["rule"]} for c in self.conventions if c["tables"] & wanted]
+
+    def conventions_notes(self, tables: set[str]) -> str:
+        rules = self.conventions_for(tables)
+        if not rules:
+            return ""
+        return ("# Query conventions for this copy of the data (from Figure 1's data quality checks)\n"
+                + "\n".join(f"- [{r['id']}] {r['rule']}" for r in rules))
 
     def unavailable_notes(self, available_tables: set[str]) -> str:
         """Lists code systems whose event tables are not loaded, so S4 can declare them unanswerable."""
@@ -367,6 +391,57 @@ MIMIC_III = MimicProfile(
 - Sample rows are withheld (credentialed data): rely on the column descriptions for formats and values.
 """.strip(),
 )
+
+
+# ----------------------------------------------------------------------
+# Figure 1 shared knowledge (docs/mimic3/)
+# ----------------------------------------------------------------------
+KNOWLEDGE_DIR = Path(__file__).resolve().parents[5] / "docs" / "mimic3"
+
+
+def load_figure1_knowledge(
+    directory: Path = KNOWLEDGE_DIR,
+) -> tuple[dict[str, tuple[str, dict[str, str]]], tuple[dict, ...]]:
+    """
+    (table_docs, conventions) from Figure 1's schema profile and query conventions.
+    Keeps descriptions, column roles, references, and rule text only; drops every
+    measured statistic. Returns empty values when the files are absent.
+    """
+    profile_path = directory / "mimic3_schema_profile.json"
+    conventions_path = directory / "mimic3_query_conventions.json"
+    table_docs: dict[str, tuple[str, dict[str, str]]] = {}
+    if profile_path.exists():
+        for table, spec in json.loads(profile_path.read_text())["tables"].items():
+            columns = {}
+            for column, col in spec.get("columns", {}).items():
+                text = col.get("description", "")
+                extras = [f"role: {col['role']}"] if col.get("role") else []
+                if col.get("references"):
+                    refs = col["references"] if isinstance(col["references"], list) else [col["references"]]
+                    extras.append("references " + ", ".join(map(str, refs)))
+                columns[column] = text + (f" ({'; '.join(extras)})" if extras else "")
+            table_docs[table] = (spec.get("description", ""), columns)
+    conventions: list[dict] = []
+    if conventions_path.exists():
+        for c in json.loads(conventions_path.read_text())["conventions"]:
+            tables = {target.split(".")[0] for target in c.get("applies_to", [])}
+            conventions.append({"id": c["id"], "rule": c["rule"], "tables": tables})
+    return table_docs, tuple(conventions)
+
+
+def _with_figure1_knowledge(profile: MimicProfile) -> MimicProfile:
+    table_docs, conventions = load_figure1_knowledge()
+    if not table_docs and not conventions:
+        return profile
+    merged = dict(profile.table_docs)
+    for table, (description, columns) in table_docs.items():
+        own_description, own_columns = merged.get(table, ("", {}))
+        merged[table] = (description or own_description, {**own_columns, **columns})
+    return replace(profile, table_docs=merged, conventions=conventions,
+                   knowledge_source="Figure 1 schema profile and query conventions (docs/mimic3)")
+
+
+MIMIC_III = _with_figure1_knowledge(MIMIC_III)
 
 
 def get_profile(dataset_name: str) -> MimicProfile | None:
