@@ -11,3 +11,8 @@ temp
 pneuma-seeker-ui
 .idea
 .claude
+
+# Local MIMIC database and execution artifacts
+src/pneuma_seeker/services/db/datasets/mimic_iii/
+data_src/mimic_iii/
+experiments/figure3/local_results/
