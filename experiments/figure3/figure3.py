@@ -120,7 +120,9 @@ def execute_plan(db, plan, repair=None, max_repairs=1):
                                          'storage': 'inline', 'preview': [{schema[0]['name']: float(value) if value is not None else None}]}}
         except (duckdb.Error, ValueError, KeyError, TypeError) as exc:
             attempts.append({'attempt': index + 1, 'error_type': type(exc).__name__, 'error': str(exc)})
-            if isinstance(exc, (duckdb.ParserException, duckdb.BinderException)) and repair and index < max_repairs:
+            parameter_mismatch = (isinstance(exc, duckdb.InvalidInputException)
+                                  and 'Parameter argument/count mismatch' in str(exc))
+            if (isinstance(exc, (duckdb.ParserException, duckdb.BinderException)) or parameter_mismatch) and repair and index < max_repairs:
                 try:
                     plan = repair(deepcopy(plan), str(exc))
                     if not isinstance(plan, dict):

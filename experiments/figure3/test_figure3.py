@@ -88,6 +88,16 @@ class Figure3Tests(unittest.TestCase):
         self.assertEqual(failed['status'], 'execution_failure')
         self.assertEqual(len(failed['attempts']), 2)
 
+    def test_parameter_count_repair_and_limit(self):
+        plan = reference_planner(self.spec)
+        plan['parameters'].append('extra')
+        result = execute_plan(self.db, plan, lambda p, e: reference_planner(self.spec))
+        self.assertEqual(result['execution_result']['answer'], 25.0)
+        self.assertEqual(len(result['attempts']), 2)
+        failed = execute_plan(self.db, plan, lambda p, e: p)
+        self.assertEqual(failed['status'], 'execution_failure')
+        self.assertEqual(len(failed['attempts']), 2)
+
     def test_reject_mutation_and_multiple_statements(self):
         for sql in ['DELETE FROM mimic_iii.admissions', 'SELECT 1; SELECT 2']:
             plan = {'dialect': 'duckdb', 'sql': sql, 'parameters': []}

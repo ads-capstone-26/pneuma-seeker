@@ -27,7 +27,7 @@ NULL for an empty cohort is a local policy; it is not specified by Figure 2.
 
 Integration entry point: `run_figure3(spec, db, planner, repair=None)`.
 Statuses: `success`, `needs_information_adjustment`, `unsupported_intent`,
-`planning_failure`, `execution_failure`. SQL parser/binder errors allow one repair.
+`planning_failure`, `execution_failure`. SQL parser/binder errors and parameter-count mismatches allow one repair.
 `run_with_upstream` accepts an `adjust(spec, issue)` callback and allows at most
 one Figure 2 adjustment. Without a callback it returns the adjustment request.
 The live `workflow.py` integration below wires this control to the teammate module.
@@ -50,7 +50,7 @@ connection and appropriate query limits.
 
 The notebook saves `live_run_result.json` with generated SQL, attempts, output,
 usage and checks. The reference planner is used only in offline sections.
-Live success does not fall back to the reference planner. Seventeen offline tests
+Live success does not fall back to the reference planner. Eighteen offline tests
 cover execution and bounded upstream adjustment. Real single-question MIMIC-III execution is now implemented below;
 multi-question accuracy evaluation remains outstanding.
 
