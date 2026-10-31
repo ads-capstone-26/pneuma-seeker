@@ -362,6 +362,41 @@ def decide(
     )
 
 
+def drop_key_only_tables(spec: IntentSpec, key_only_tables: dict[str, tuple[str, ...]]) -> IntentSpec:
+    """Removes a required table whose concepts use only key columns that another required
+    table also has (e.g. patients used just for subject_id next to diagnoses_icd). Concepts
+    and schema_mapping entries move to that table."""
+    for table, keys in key_only_tables.items():
+        if table not in spec.required_tables or len(spec.required_tables) < 2:
+            continue
+        used = {c.column for c in spec.concepts if c.table == table}
+        used |= set(spec.schema_mapping.get(table, {}).values())
+        if not used <= set(keys):
+            continue
+        columns = {t.name: {c.name for c in t.columns} for t in spec.tables}
+        others = [t for t in spec.required_tables if t != table]
+        target = next((t for t in others if used <= columns.get(t, set())), None)
+        if target is None:
+            continue
+        concepts = [c.model_copy(update={"table": target}) if c.table == table else c for c in spec.concepts]
+        mapping = {t: dict(m) for t, m in spec.schema_mapping.items() if t != table}
+        if spec.schema_mapping.get(table):
+            mapping.setdefault(target, {}).update(spec.schema_mapping[table])
+        assumptions = dict(spec.assumptions)
+        assumptions.setdefault("figure2_validation_notes", [])
+        assumptions["figure2_validation_notes"] = list(assumptions["figure2_validation_notes"]) + [
+            f"Dropped {table}: only {', '.join(sorted(used)) or 'no columns'} used, available in {target}."]
+        spec = spec.model_copy(update={
+            "required_tables": others,
+            "tables": [t for t in spec.tables if t.name != table],
+            "concepts": concepts,
+            "schema_mapping": mapping,
+            "join_paths": [p for p in spec.join_paths if table not in (p.left_table, p.right_table)],
+            "assumptions": assumptions,
+        })
+    return spec
+
+
 # ----------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------

@@ -51,6 +51,9 @@ class MimicProfile:
     # Figure 1 query conventions: {"id", "rule", "tables"} (tables the rule applies to)
     conventions: tuple[dict, ...] = ()
     knowledge_source: str = "built-in documentation"
+    # Tables that add nothing when only these key columns are used and another
+    # required table carries them, e.g. patients used just for subject_id
+    key_only_tables: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def code_columns(self) -> set[str]:
@@ -368,6 +371,7 @@ MIMIC_III = MimicProfile(
     key_columns=("icustay_id", "hadm_id", "subject_id", "cgid"),
     private=True,
     catalog=True,
+    key_only_tables={"patients": ("subject_id",)},
     table_docs=MIMIC_III_TABLE_DOCS,
     domain_notes="""
 # MIMIC-III conventions (apply them when grounding)
