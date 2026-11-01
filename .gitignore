@@ -18,3 +18,11 @@ data_src/mimic*/
 data_src/ehrsql/
 src/pneuma_seeker/services/db/datasets/mimic*/
 eval_results/
+
+# Local slide figures and the scripts that generate them (not tracked)
+scripts/mimic3_eda.py
+scripts/pneuma_seeker_overview.py
+scripts/pneumarx_architecture.py
+docs/figures/mimic3_overview.*
+docs/figures/pneuma_seeker_overview.*
+docs/figures/pneumarx_architecture.*
