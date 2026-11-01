@@ -1,3 +1,4 @@
+import json
 import unittest
 from copy import deepcopy
 
@@ -80,3 +81,28 @@ class WorkflowTests(unittest.TestCase):
         r = run_workflow(self.spec['question'], p, self.db, planner)
         self.assertEqual(r['status'], 'unanswerable')
         self.assertEqual(r['upstream_adjustments_used'], 1)
+
+    def test_new_conventions_reach_model_without_patients(self):
+        from llm_planner import make_planner
+
+        convention = {'id': 'duplicate_rows',
+                      'rule': 'Count distinct hadm_id because diagnoses rows may repeat.'}
+        ready = self.ready.model_copy(deep=True)
+        ready.query_conventions = [convention]
+        self.assertNotIn('patients', ready.required_tables)
+        self.db.execute('INSERT INTO mimic_iii.diagnoses_icd SELECT * FROM mimic_iii.diagnoses_icd')
+        captured = []
+        plan = reference_planner(self.spec)
+        plan.update(status='ready', steps=['Deduplicate admissions before counting'])
+
+        class Model:
+            def chat(self, messages, option):
+                captured.append(json.loads(messages[1]['content'])['intent_spec'])
+                return iter([json.dumps(plan)])
+
+        result = run_workflow(self.spec['question'], Preparer([ready]), self.db,
+                              make_planner(Model()))
+        self.assertEqual(captured[0]['query_conventions'], [convention])
+        self.assertNotIn('patients', captured[0]['schema_mapping'])
+        self.assertEqual(result['status'], 'success')
+        self.assertEqual(result['execution_result']['answer'], 25.0)

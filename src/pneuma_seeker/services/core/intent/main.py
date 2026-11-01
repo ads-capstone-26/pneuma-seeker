@@ -56,6 +56,7 @@ from pneuma_seeker.services.core.intent.prompt_factory import IntentPromptFactor
 from pneuma_seeker.services.core.intent.umls import UMLSClient
 from pneuma_seeker.services.core.intent.validator import (
     decide,
+    drop_key_only_tables,
     find_partition_families,
     parse_join_paths,
     repairable_issues,
@@ -286,6 +287,7 @@ class IntentPreparer:
             value_issues=value_issues,
         )
         if profile is not None and isinstance(result, IntentSpec):
+            result = drop_key_only_tables(result, profile.key_only_tables)
             # Figure 3 follows the Figure 1 conventions that apply to the tables it will query
             result = result.model_copy(update={"query_conventions": profile.conventions_for(result.required_tables)})
         self.__log(f"Result: {result.status} (timings: { {k: round(v, 1) for k, v in context.timings.items()} })")
@@ -478,7 +480,9 @@ class IntentPreparer:
     def _value_issues(self, context: PreparationContext) -> list[str]:
         concepts, _, _, _ = validate_grounding(context.grounding, context.tables)
         return self.code_lookup.verify_filter_values(context.dataset_name, context.profile, concepts) + \
-            self.code_lookup.check_against_candidates(context.profile, concepts, context.code_candidates)
+            self.code_lookup.check_against_candidates(context.profile, concepts, context.code_candidates) + \
+            self.code_lookup.pattern_qualifier_issues(
+                context.dataset_name, context.profile, context.question, concepts)
 
     # ------------------------------------------------------------------
     # LLM helpers

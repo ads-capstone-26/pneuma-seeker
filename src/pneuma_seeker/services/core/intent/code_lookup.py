@@ -347,6 +347,45 @@ class CodeLookup:
                 )
         return issues
 
+    def pattern_qualifier_issues(
+        self, dataset_name: str, profile: MimicProfile, question: str, concepts: list[Concept]
+    ) -> list[str]:
+        """
+        Issues for code patterns (e.g. '250%') that are broader than a qualifier in the
+        question: the question says "type 2 diabetes", some codes the pattern matches are
+        titled "type II" and others "type I". A qualifier is a two-word phrase of the
+        question that occurs in the titles of some matched codes while others pair its
+        first word with a different one ("type I"). Uses dictionary titles only.
+        """
+        phrases = _phrases(question)
+        issues: list[str] = []
+        for concept in concepts:
+            system = next((s for s in profile.code_systems.values() if concept.table in s.event_tables
+                           and concept.column in s.event_code_columns and s.dictionary), None)
+            if system is None or system.label_column != "long_title":
+                continue
+            for value in concept.filter_values:
+                if not (isinstance(value, str) and "%" in value):
+                    continue
+                titles = [(code, long) for code, _, long in self._titles(dataset_name, system) if _like(value, code)]
+                for phrase in phrases:
+                    with_phrase = [code for code, title in titles if phrase in _normalize(title)]
+                    # Only a contrasting qualifier counts: "type ii" against titles saying "type i"
+                    first, second = phrase.split()
+                    contrast = re.compile(rf" {first} (?!{second} )[a-z0-9]+ ")
+                    without = [(code, title) for code, title in titles
+                               if phrase not in _normalize(title) and contrast.search(_normalize(title))]
+                    if with_phrase and without:
+                        with_phrase, shown = sorted(with_phrase), phrase.strip()
+                        examples = "; ".join(f"{code}: {title}" for code, title in without[:3])
+                        issues.append(
+                            f"Concept '{concept.term}': pattern '{value}' also matches {len(without)} codes "
+                            f"whose titles do not say '{shown}' (e.g. {examples}). The question asks for "
+                            f"'{shown}': list only the matching codes ({', '.join(with_phrase[:40])}"
+                            f"{', ...' if len(with_phrase) > 40 else ''})")
+                        break
+        return issues
+
     def check_against_candidates(
         self, profile: MimicProfile, concepts: list[Concept], candidates: list[CodeCandidates]
     ) -> list[str]:
@@ -496,6 +535,25 @@ def _word_overlap(title: str, phrase: str, threshold: float = 0.6) -> bool:
     stems = lambda text: {w[:4] for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) >= 3}  # noqa: E731
     title_stems = stems(title)
     return bool(title_stems) and len(title_stems & stems(phrase)) / len(title_stems) >= threshold
+
+
+_ROMAN = {"1": "i", "2": "ii", "3": "iii", "4": "iv", "5": "v"}
+_STOPWORDS = {"a", "an", "the", "of", "in", "on", "with", "without", "and", "or", "to", "for", "by", "at",
+              "is", "was", "were", "are", "be", "been", "who", "what", "which", "how", "many", "much", "that",
+              "patients", "patient", "had", "has", "have", "did", "do", "does", "any", "all"}
+
+
+def _normalize(text: str) -> str:
+    """Lowercase words, with 'type 2' / 'stage 3' written as roman numerals as in ICD-9 titles."""
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    return " " + " ".join(_ROMAN.get(w, w) if i and words[i - 1] in ("type", "stage", "grade") else w
+                          for i, w in enumerate(words)) + " "
+
+
+def _phrases(question: str) -> list[str]:
+    """Two-word phrases of the question without stopwords, padded for whole-word matching."""
+    words = _normalize(question).split()
+    return [f" {a} {b} " for a, b in zip(words, words[1:]) if a not in _STOPWORDS and b not in _STOPWORDS]
 
 
 def _like(pattern: str, value: str) -> bool:

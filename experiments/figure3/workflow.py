@@ -111,7 +111,7 @@ def run_integrated(question, db_path=DEFAULT_DB, output=OUTPUT):
                        usage={'input_tokens': llm.total_input_tokens,
                               'output_tokens': llm.total_output_tokens},
                        database={'path': str(Path(db_path).resolve()), 'read_only': True},
-                       figure2_source_commit='d30ca4835efca211ef186c7d4d9bc55ddcb10469')
+                       figure2_source_commit='c673ab4aa6a9f14d9fe32bec7cd991bddeb73fc8')
         output = Path(output)
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(outcome, indent=2) + '\n')

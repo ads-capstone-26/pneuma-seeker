@@ -16,8 +16,8 @@ def configured_llm():
         sys.path.insert(0, str(root / 'src'))
     from pneuma_seeker.shared.config import Config
     config = Config(str(root / '.env'))
-    # Figure 3 has its own reproducible model setting, independent of Figure 2.
-    config.LLM_PATH = os.getenv('FIGURE3_LLM_MODEL', 'gpt-4.1-mini-2025-04-14')
+    # Use the shared model unless Figure 3 explicitly overrides it.
+    config.LLM_PATH = os.getenv('FIGURE3_LLM_MODEL') or config.LLM_PATH
     if config.USE_AZURE_LLM:
         from pneuma_seeker.services.language_model.impl.azure_openai_llm import AzureOpenAILLM as Adapter
         present = bool(config.AZURE_OPENAI_API_KEY and config.AZURE_OPENAI_ENDPOINT)
@@ -95,6 +95,8 @@ needs_information_adjustment with a reason. Generate one SELECT (WITH allowed),
 one numeric column named answer, and one result row. Use supplied physical table paths.
 Use ? parameters for filter values. Distinguish cohort filters from numerator filters,
 respect entity-level deduplication, and return NULL for a zero denominator.
+Follow query_conventions, including COUNT(DISTINCT entity_key) when rows may repeat.
+Do not add a patients join just to obtain subject_id when supplied tables already have it.
 Only reference supplied tables. No file/network access, extensions, DDL or DML.
 When repairing SQL preserve the original intent. Do not generate Python.'''
         payload = {'intent_spec': spec}

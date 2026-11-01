@@ -38,8 +38,8 @@ the HF query. Use `repair=lambda plan, error: planner(spec, plan, error)` with
 `run_figure3`. Live planning reads the local `.env` through the existing Config
 and adapter. Restart the kernel after changing configuration. Run directly with
 `python experiments/figure3/llm_planner.py` or use the final notebook cell.
-Figure 3 defaults to `gpt-4.1-mini-2025-04-14`, independently of the shared
-`LLM_PATH`. Override it with `FIGURE3_LLM_MODEL` in local `.env`.
+Figure 3 defaults to the shared `LLM_PATH` (local integration uses
+`gpt-5.4-mini-2026-03-17`). Override it with `FIGURE3_LLM_MODEL` in local `.env`.
 It records model, elapsed time, tokens and six synthetic checks. Five reuse the
 generated SQL locally; the sixth calls the model to repair an injected SQL typo. Expected answers never enter prompts.
 Provider failures are reported by exception type, without raw credentials.
@@ -96,8 +96,9 @@ python experiments/figure3/workflow.py
 python experiments/figure3/workflow.py --question "Among hospital admissions with a heart failure diagnosis, what percentage ended in death during that admission?"
 ```
 
-The teammate's actual IntentPreparer and Pydantic contracts are copied unchanged
-from ziming-figure2 commit d30ca4835efca211ef186c7d4d9bc55ddcb10469.
+The teammate's IntentPreparer and Pydantic contracts are synchronized with
+master commit c673ab4aa6a9f14d9fe32bec7cd991bddeb73fc8.
+The planner receives query_conventions and supports contracts without a patients table.
 `prepare(question, 'mimic_iii')` generates the full IntentSpec, then
 `to_figure3_view(max_sample_rows=0)` feeds the model planner directly.
 The old JSON contributes only the default question text, not schema or filters.
