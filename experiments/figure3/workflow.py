@@ -82,6 +82,8 @@ def run_workflow(question, preparer, db, planner, *, dataset='mimic_iii',
         if outcome['status'] != 'needs_information_adjustment':
             return outcome
         if used == 1:
+            outcome['status'] = 'execution_failure'
+            outcome['failure_kind'] = 'upstream_adjustment_limit'
             outcome['requested_action'] = 'stop: upstream adjustment limit reached'
             return outcome
         adjustment = AdjustmentRequest(reason=outcome['reason'])

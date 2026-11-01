@@ -40,8 +40,8 @@ def validate_spec(spec, db):
     for field in ('join_paths', 'assumptions'):
         if field not in spec:
             raise InformationRequired(f'Missing {field}')
-    if spec['output_spec'].get('answer_type') != 'number' or spec.get('aggregation_level') != 'single_value':
-        raise UnsupportedIntent('Current Figure 3 executor supports single numeric results only')
+    if spec['output_spec'].get('answer_type') not in {'number', 'string', 'boolean', 'list', 'table'}:
+        raise UnsupportedIntent('Unsupported output answer_type')
     tables = {t['name']: t for t in spec['tables']}
     if len(tables) != len(spec['tables']):
         raise InformationRequired('Duplicate table metadata')
@@ -90,7 +90,26 @@ FROM cohort''',
     }
 
 
-def execute_plan(db, plan, repair=None, max_repairs=1):
+def json_value(value):
+    from datetime import date, datetime, time
+    from decimal import Decimal
+    from uuid import UUID
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, (date, datetime, time)):
+        return value.isoformat()
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, bytes):
+        return value.hex()
+    if isinstance(value, (list, tuple)):
+        return [json_value(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): json_value(v) for k, v in value.items()}
+    return value
+
+
+def execute_plan(db, plan, repair=None, max_repairs=1, *, answer_type='number', preview_limit=100):
     if max_repairs < 0:
         raise ValueError('max_repairs must be non-negative')
     plan = deepcopy(plan)
@@ -106,28 +125,48 @@ def execute_plan(db, plan, repair=None, max_repairs=1):
                 raise ValueError('Plan must contain one SELECT statement')
             cursor = db.execute(plan['sql'], plan['parameters'])
             schema = [{'name': c[0], 'type': str(c[1])} for c in cursor.description]
-            rows = cursor.fetchmany(2)
-            if len(schema) != 1 or len(rows) != 1:
-                raise ValueError('Expected one scalar result')
-            value = rows[0][0]
-            from decimal import Decimal
-            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float, Decimal))):
-                raise ValueError('Expected a numeric or NULL answer')
+            names = [c['name'] for c in schema]
+            if len(set(names)) != len(names):
+                raise ValueError('Result columns require unique aliases')
+            rows = cursor.fetchall()
+            scalar = answer_type in {'number', 'string', 'boolean'}
+            value = None
+            if scalar:
+                if len(schema) != 1 or len(rows) != 1:
+                    raise ValueError('Expected one scalar result')
+                value = rows[0][0]
+                from decimal import Decimal
+                valid = {'number': isinstance(value, (int, float, Decimal)) and not isinstance(value, bool),
+                         'string': isinstance(value, str), 'boolean': isinstance(value, bool)}
+                if value is not None and not valid[answer_type]:
+                    raise ValueError('Result does not match requested answer_type')
+                if answer_type == 'number' and value is not None:
+                    value = float(value)
+            elif answer_type == 'list' and len(schema) != 1:
+                raise ValueError('List output requires one column')
+            records = [dict(zip(names, [json_value(v) for v in row])) for row in rows]
+            result = {'schema': schema, 'row_count': len(rows), 'storage': 'inline',
+                      'result_reference': '#/execution_result/rows', 'rows': records,
+                      'preview': records[:preview_limit]}
+            if scalar:
+                result['answer'] = json_value(value)
             attempts.append({'attempt': index + 1, 'status': 'success'})
             return {'status': 'success', 'query_plan': plan, 'attempts': attempts,
-                    'execution_result': {'answer': float(value) if value is not None else None,
-                                         'schema': schema, 'row_count': 1,
-                                         'storage': 'inline', 'preview': [{schema[0]['name']: float(value) if value is not None else None}]}}
+                    'execution_result': result}
         except (duckdb.Error, ValueError, KeyError, TypeError) as exc:
             attempts.append({'attempt': index + 1, 'error_type': type(exc).__name__, 'error': str(exc)})
             parameter_mismatch = (isinstance(exc, duckdb.InvalidInputException)
                                   and 'Parameter argument/count mismatch' in str(exc))
-            if (isinstance(exc, (duckdb.ParserException, duckdb.BinderException)) or parameter_mismatch) and repair and index < max_repairs:
+            if (isinstance(exc, (duckdb.ParserException, duckdb.BinderException, duckdb.CatalogException)) or parameter_mismatch) and repair and index < max_repairs:
                 try:
                     plan = repair(deepcopy(plan), str(exc))
                     if not isinstance(plan, dict):
                         raise ValueError('Repair must return a plan object')
                     continue
+                except InformationRequired as repair_exc:
+                    return {'status': 'needs_information_adjustment', 'reason': str(repair_exc),
+                            'query_plan': plan, 'attempts': attempts,
+                            'requested_action': 'Return an updated Figure 2 IntentSpec'}
                 except Exception as repair_exc:
                     return {'status': 'execution_failure', 'reason': 'Repair failed: ' + type(repair_exc).__name__, 'attempts': attempts}
             return {'status': 'execution_failure', 'reason': str(exc), 'attempts': attempts}
@@ -145,7 +184,7 @@ def run_figure3(spec, db, planner=reference_planner, repair=None):
         return {'status': 'execution_failure', 'reason': str(exc)}
     except Exception as exc:
         return {'status': 'planning_failure', 'reason': type(exc).__name__}
-    outcome = execute_plan(db, plan, repair)
+    outcome = execute_plan(db, plan, repair, answer_type=spec['output_spec']['answer_type'])
     if outcome['status'] == 'success':
         outcome['execution_result']['unit'] = spec['output_spec'].get('unit')
         outcome['assumptions'] = deepcopy(spec['assumptions'])
@@ -167,6 +206,8 @@ def run_with_upstream(spec, db, planner, repair=None, adjust=None):
         if outcome['status'] != 'needs_information_adjustment' or adjust is None:
             return outcome
         if used == 1:
+            outcome['status'] = 'execution_failure'
+            outcome['failure_kind'] = 'upstream_adjustment_limit'
             outcome['requested_action'] = 'stop: upstream adjustment limit reached'
             return outcome
         try:

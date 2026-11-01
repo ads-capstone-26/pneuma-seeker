@@ -92,13 +92,20 @@ schema_mapping, join_paths, assumptions and relevant query_conventions.
 Do not invent missing semantics. Return JSON with status ready, dialect duckdb,
 steps (string list), sql and parameters (flat list), or status
 needs_information_adjustment with a reason. Generate one SELECT (WITH allowed),
-one numeric column named answer, and one result row. Use supplied physical table paths.
+matching output_spec.answer_type: number/string/boolean requires one column named answer
+and one row; list requires one column and any number of rows; table supports multiple
+columns and rows, including grouped results. Use unique column aliases and supplied physical table paths.
 Use ? parameters for filter values. Distinguish cohort filters from numerator filters,
 respect entity-level deduplication, and return NULL for a zero denominator.
 Follow query_conventions, including COUNT(DISTINCT entity_key) when rows may repeat.
+Apply conditional conventions only when their condition is explicitly met by the intent.
+For example, never infer an adult-only cohort from a general admissions question.
 Do not add a patients join just to obtain subject_id when supplied tables already have it.
 Only reference supplied tables. No file/network access, extensions, DDL or DML.
-When repairing SQL preserve the original intent. Do not generate Python.'''
+When repairing SQL preserve the original intent. Fix SQL authoring errors internally.
+If the supplied schema or semantics cannot support the task, return
+needs_information_adjustment with a concrete reason instead of inventing data.
+Empty results alone are not evidence of missing information. Do not generate Python.'''
         payload = {'intent_spec': spec}
         if previous_plan is not None:
             payload.update(previous_plan=previous_plan, sql_error=sql_error)

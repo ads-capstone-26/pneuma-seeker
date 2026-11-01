@@ -106,3 +106,33 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn('patients', captured[0]['schema_mapping'])
         self.assertEqual(result['status'], 'success')
         self.assertEqual(result['execution_result']['answer'], 25.0)
+
+    def test_execution_information_request_replans_with_updated_spec(self):
+        from figure3 import InformationRequired
+        updated = self.ready.model_copy(deep=True)
+        updated.query_conventions = [{'id': 'confirmed', 'rule': 'Use admission counts'}]
+        seen = []
+        def planner(spec):
+            seen.append(spec['query_conventions'])
+            plan = reference_planner(self.spec)
+            if len(seen) == 1:
+                plan['sql'] = 'SELECT missing_column FROM mimic_iii.admissions'
+            return plan
+        def repair(spec, plan, error):
+            raise InformationRequired('Confirm admission count mapping')
+        p = Preparer([self.ready, updated])
+        result = run_workflow(self.spec['question'], p, self.db, planner, repair=repair)
+        self.assertEqual(result['status'], 'success')
+        self.assertEqual(result['upstream_adjustments_used'], 1)
+        self.assertEqual(seen[-1], updated.query_conventions)
+
+    def test_execution_adjustment_stops_after_one_retry(self):
+        def planner(spec):
+            return {'dialect': 'duckdb', 'parameters': [], 'sql': 'SELECT missing_column'}
+        def repair(spec, plan, error):
+            raise InformationRequired('Missing mapping')
+        p = Preparer([self.ready, self.ready])
+        result = run_workflow(self.spec['question'], p, self.db, planner, repair=repair)
+        self.assertEqual(result['status'], 'execution_failure')
+        self.assertEqual(result['failure_kind'], 'upstream_adjustment_limit')
+        self.assertEqual(len(p.requests), 2)

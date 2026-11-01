@@ -112,9 +112,19 @@ No embedding index, Postgres server, or Conductor is required for this catalog p
 request invokes the same preparer's `prepare(..., adjustment_request=AdjustmentRequest(...))`
 at most once, preserving its context. A second information request stops. An SQL
 repair receives the latest spec. The full typed spec and adjustment history are
-retained for review. The current executor explicitly supports scalar numeric
-answers; other output shapes return unsupported_intent rather than silently
-pretending general support.
+retained for review. The executor supports number/string/boolean scalars, single-column lists, and
+multi-column tables, including grouped and empty results. ExecutionResult includes
+schema, exact row_count, all rows inline, a JSON pointer result_reference, and the
+first 100 rows as preview. Decimal table values are strings to preserve precision;
+dates/times use ISO format. Full results currently materialize in memory, so large
+result sets need a future streaming/file-backed implementation.
+
+SQL parser, binder, catalog and parameter-count errors allow one internal repair.
+The repair planner can raise InformationRequired when the supplied contract lacks
+necessary information; this enters the same one-adjustment Figure 2 budget.
+Repeated adjustment requests terminate with execution_failure and
+failure_kind=upstream_adjustment_limit. Empty tables are successful outputs, not
+an automatic reason to adjust upstream information.
 
 **Current handoff:** `local_results/figure4_integrated_handoff.json`.
 `integrated_run.json` contains the same trace. The separate
@@ -129,3 +139,16 @@ This is a real Figure 2 interpretation difference; Figure 3 preserves it for Fig
 offline tests cover typed handoff, non-ready states, actual AdjustmentRequest
 construction, the adjustment limit, and refusal after adjustment. Live clarification
 and adjustment branches have not been forced against the provider.
+
+
+## Updated Figure 3 validation
+
+The offline suite now contains 28 tests, including grouped/empty tables, full
+results versus preview truncation, scalar types, date/decimal serialization,
+and execution-time information adjustment with a strict one-retry limit.
+Live validation uses `gpt-5.4-mini-2026-03-17`: the real integrated workflow,
+six synthetic checks including SQL repair, and a grouped admissions query.
+Local validation artifacts stay under ignored `local_results/`.
+This is focused integration validation, not a multi-question accuracy benchmark.
+Conditional query conventions apply only when their condition is met; a general
+admissions question must not silently become an adult-only cohort.
